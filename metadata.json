@@ -1,0 +1,6 @@
+{
+  "name": "CBT TKA Bahasa Inggris SMK",
+  "description": "Aplikasi Computer Based Test (CBT) Try Out TKA Bahasa Inggris SMK dengan integrasi Google Spreadsheet real-time, anti-kecurangan, dan dashboard monitoring admin.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
