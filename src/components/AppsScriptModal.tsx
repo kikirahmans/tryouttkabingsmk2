@@ -274,38 +274,37 @@ export const AppsScriptModal: React.FC<AppsScriptModalProps> = ({
               <div className="p-4 bg-slate-900 text-white rounded-xl space-y-2">
                 <div className="flex items-center gap-2 font-bold text-sm">
                   <Github className="w-5 h-5 text-purple-400" />
-                  Langkah Publikasi ke GitHub & GitHub Pages
+                  Solusi GitHub Pages & GitHub Actions Otomatis
                 </div>
                 <p className="text-xs text-slate-300">
-                  Aplikasi ini dirancang modular menggunakan React, TypeScript, Vite, dan Tailwind CSS. Anda dapat mempublikasikan repositori ini ke GitHub dan meng-host-nya secara gratis via GitHub Pages atau Vercel.
+                  File workflow otomatis <code>.github/workflows/deploy.yml</code> dan konfigurasi path relatif <code>base: './'</code> di <code>vite.config.ts</code> telah kami siapkan. Ikuti 2 langkah cepat berikut agar link website Anda langsung aktif!
                 </p>
               </div>
 
               <div className="space-y-3">
                 <h4 className="font-bold text-slate-800 text-sm">
-                  1. Perintah Git untuk Upload ke Repository Baru:
+                  1. Push Perubahan Terbaru ke Repositori GitHub Anda:
                 </h4>
                 <div className="p-3 bg-slate-950 text-emerald-400 rounded-lg font-mono text-xs space-y-1">
-                  <div>git init</div>
                   <div>git add .</div>
-                  <div>git commit -m "Initial commit: CBT TKA Bahasa Inggris SMK Gorontalo"</div>
-                  <div>git branch -M main</div>
-                  <div>git remote add origin https://github.com/USERNAME-ANDA/cbt-tka-smk.git</div>
-                  <div>git push -u origin main</div>
+                  <div>git commit -m "feat: tambahkan GitHub Actions deploy workflow & base relative"</div>
+                  <div>git push origin main</div>
                 </div>
+                <p className="text-[11px] text-slate-500">
+                  (Jika branch Anda bernama <code>master</code>, gunakan <code>git push origin master</code>).
+                </p>
               </div>
 
               <div className="space-y-3">
                 <h4 className="font-bold text-slate-800 text-sm">
-                  2. Build untuk GitHub Pages (Client Static):
+                  2. Cek Tab "Actions" di Repositori GitHub:
                 </h4>
-                <div className="p-3 bg-slate-950 text-sky-300 rounded-lg font-mono text-xs space-y-1">
-                  <div>npm run build</div>
-                  <div className="text-slate-400"># Folder 'dist' siap di-deploy langsung ke hosting statis manapun</div>
-                </div>
-                <p className="text-xs text-slate-600">
-                  Saat di-hosting di GitHub Pages, pengiriman data tetap bekerja 100% langsung ke Google Apps Script Web App tanpa memerlukan server tambahan!
-                </p>
+                <ol className="list-decimal list-inside space-y-1.5 text-xs text-slate-600 pl-1">
+                  <li>Buka tab <strong>Actions</strong> di halaman repository GitHub Anda.</li>
+                  <li>Workflow bernama <strong>"Deploy to GitHub Pages"</strong> akan otomatis berjalan (~40 detik).</li>
+                  <li>Setelah centang hijau ✅ selesai, buka tab <strong>Settings</strong> &rarr; <strong>Pages</strong>.</li>
+                  <li>Link website publik Anda akan langsung muncul di bagian atas (contoh: <code>https://username.github.io/nama-repo/</code>).</li>
+                </ol>
               </div>
             </div>
           )}
