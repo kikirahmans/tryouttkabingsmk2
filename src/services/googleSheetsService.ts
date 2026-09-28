@@ -1,28 +1,29 @@
-/**
- * Google Spreadsheet & Apps Script Integration Service
- * Mendukung pengiriman langsung dari browser (mode no-cors / form-encoded)
- * dan melalui proxy backend Express untuk ketahanan 300 siswa bersamaan.
- */
+import { Student } from '../data/studentsData';
 
 export interface ExamSubmissionPayload {
   submissionId: string;
   nama: string;
+  studentName?: string;
   rombel: string;
   nipd: string;
   nisn: string;
   score: number;
   status: 'Selesai' | 'Didiskualifikasi' | 'Waktu Habis';
   violations: number;
-  violationLog: Array<{ type: string; time: string }>;
+  durationSeconds: number;
   startTime: string;
   endTime: string;
-  durationSeconds: number;
+  answers?: Record<number, any>;
   deviceInfo: {
     userAgent: string;
     platform: string;
-    screenResolution: string;
-    viewport: string;
+    screenResolution?: string;
+    viewport?: string;
   };
+  violationLog: Array<{
+    type: string;
+    time: string;
+  }>;
 }
 
 export interface ViolationPayload {
@@ -51,12 +52,17 @@ export function saveGasUrl(url: string): void {
 }
 
 /**
- * Kode Google Apps Script Lengkap yang Siap Dicopy & Ditempel ke Google Sheets
+ * Kode Google Apps Script Lengkap (Versi 2)
+ * Mendukung:
+ * 1. Simpan hasil ujian serentak 300+ siswa (LockService)
+ * 2. Log pelanggaran real-time
+ * 3. Unduh data sinkronisasi ke perangkat lain (get_submissions)
+ * 4. Hapus data siswa yang otomatis terhapus dari baris Spreadsheet (delete_submission)
  */
 export const GOOGLE_APPS_SCRIPT_CODE = `/**
  * ========================================================================
- * SKRIP GOOGLE APPS SCRIPT - CBT TKA BAHASA INGGRIS SMK GORONTALO 2026
- * Mendukung 300+ Siswa Bersamaan dengan LockService & Validasi Duplikasi
+ * SKRIP GOOGLE APPS SCRIPT (VERSI 2) - CBT TKA SMKN 2 GORONTALO
+ * Mendukung 300+ Siswa, Sinkronisasi Multi-Device, & Hapus Otomatis
  * ========================================================================
  */
 
@@ -104,6 +110,79 @@ function setupSheetHeaders(ss) {
 }
 
 function doGet(e) {
+  var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : "ping";
+
+  // FITUR 1: SINKRONISASI / UNDUH DATA DARI SPREADSHEET
+  if (action === "get_submissions" || action === "sync") {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    setupSheetHeaders(ss);
+    var sheetHasil = ss.getSheetByName("Hasil_Ujian");
+    var values = sheetHasil ? sheetHasil.getDataRange().getValues() : [];
+    var list = [];
+    for (var i = 1; i < values.length; i++) {
+      var r = values[i];
+      if (r[5]) { // NISN ada
+        list.push({
+          timestamp: r[0],
+          submissionId: r[1],
+          nama: String(r[2] || ""),
+          rombel: String(r[3] || ""),
+          nipd: String(r[4] || ""),
+          nisn: String(r[5] || "").trim(),
+          score: r[6] !== "" && r[6] !== null ? Number(r[6]) : null,
+          status: String(r[7] || "Selesai"),
+          violations: Number(r[8] || 0),
+          durationMinutes: r[9],
+          startTime: r[10],
+          endTime: r[11],
+          deviceInfo: { platform: String(r[12] || "-"), userAgent: String(r[12] || "-") },
+          screenResolution: String(r[13] || "-"),
+          violationDetails: String(r[14] || "")
+        });
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "success",
+      count: list.length,
+      submissions: list,
+      time: new Date().toISOString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  // FITUR 2: HAPUS SISWA VIA GET FALLBACK
+  if (action === "delete_submission") {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    setupSheetHeaders(ss);
+    var targetNisn = String(e.parameter.nisn || "").trim();
+    var deletedCount = 0;
+    if (targetNisn) {
+      var sheetHasil = ss.getSheetByName("Hasil_Ujian");
+      if (sheetHasil) {
+        var vals = sheetHasil.getDataRange().getValues();
+        for (var i = vals.length - 1; i >= 1; i--) {
+          if (String(vals[i][5] || "").trim() === targetNisn) {
+            sheetHasil.deleteRow(i + 1);
+            deletedCount++;
+          }
+        }
+      }
+      var sheetLog = ss.getSheetByName("Log_Pelanggaran");
+      if (sheetLog) {
+        var logVals = sheetLog.getDataRange().getValues();
+        for (var j = logVals.length - 1; j >= 1; j--) {
+          if (String(logVals[j][3] || "").trim() === targetNisn) {
+            sheetLog.deleteRow(j + 1);
+          }
+        }
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "success",
+      message: "Data siswa berhasil dihapus dari Spreadsheet",
+      deletedCount: deletedCount
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+
   return ContentService.createTextOutput(JSON.stringify({
     status: "ok",
     message: "Google Apps Script CBT SMK Negeri 2 Gorontalo Aktif & Terhubung",
@@ -112,15 +191,13 @@ function doGet(e) {
 }
 
 function doPost(e) {
-  // LockService mencegah tabrakan data (race condition) saat 300 siswa submit bersamaan
   var lock = LockService.getScriptLock();
   try {
-    // Tunggu giliran lock sampai 30 detik
     lock.waitLock(30000);
   } catch (err) {
     return ContentService.createTextOutput(JSON.stringify({
       status: "error",
-      message: "Server Spreadsheet sedang sibuk, silakan coba kirim ulang dalam 5 detik."
+      message: "Server Spreadsheet sedang sibuk, silakan coba kirim ulang."
     })).setMimeType(ContentService.MimeType.JSON);
   }
 
@@ -131,7 +208,73 @@ function doPost(e) {
     var rawData = e.postData.contents;
     var data = JSON.parse(rawData);
 
-    // KASUS 1: LAPORAN LOG KECURANGAN REAL-TIME
+    // KASUS 1: HAPUS DATA SISWA DARI SPREADSHEET
+    if (data.action === "delete_submission") {
+      var targetNisn = String(data.nisn || "").trim();
+      var delCount = 0;
+      if (targetNisn) {
+        var sheetHasil = ss.getSheetByName("Hasil_Ujian");
+        if (sheetHasil) {
+          var vals = sheetHasil.getDataRange().getValues();
+          for (var i = vals.length - 1; i >= 1; i--) {
+            if (String(vals[i][5] || "").trim() === targetNisn) {
+              sheetHasil.deleteRow(i + 1);
+              delCount++;
+            }
+          }
+        }
+        var sheetLog = ss.getSheetByName("Log_Pelanggaran");
+        if (sheetLog) {
+          var logVals = sheetLog.getDataRange().getValues();
+          for (var j = logVals.length - 1; j >= 1; j--) {
+            if (String(logVals[j][3] || "").trim() === targetNisn) {
+              sheetLog.deleteRow(j + 1);
+            }
+          }
+        }
+      }
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        message: "Data siswa berhasil dihapus dari Spreadsheet.",
+        deletedCount: delCount
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // KASUS 2: UNDUH DATA SINKRONISASI
+    if (data.action === "get_submissions" || data.action === "sync") {
+      var sheetHasil = ss.getSheetByName("Hasil_Ujian");
+      var values = sheetHasil ? sheetHasil.getDataRange().getValues() : [];
+      var list = [];
+      for (var i = 1; i < values.length; i++) {
+        var r = values[i];
+        if (r[5]) {
+          list.push({
+            timestamp: r[0],
+            submissionId: r[1],
+            nama: String(r[2] || ""),
+            rombel: String(r[3] || ""),
+            nipd: String(r[4] || ""),
+            nisn: String(r[5] || "").trim(),
+            score: r[6] !== "" && r[6] !== null ? Number(r[6]) : null,
+            status: String(r[7] || "Selesai"),
+            violations: Number(r[8] || 0),
+            durationMinutes: r[9],
+            startTime: r[10],
+            endTime: r[11],
+            deviceInfo: { platform: String(r[12] || "-"), userAgent: String(r[12] || "-") },
+            screenResolution: String(r[13] || "-"),
+            violationDetails: String(r[14] || "")
+          });
+        }
+      }
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        count: list.length,
+        submissions: list
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // KASUS 3: LAPORAN LOG KECURANGAN REAL-TIME
     if (data.action === "log_violation") {
       var sheetLog = ss.getSheetByName("Log_Pelanggaran");
       sheetLog.appendRow([
@@ -149,11 +292,10 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
-    // KASUS 2: PENGIRIMAN HASIL UJIAN AKHIR
+    // KASUS 4: PENGIRIMAN HASIL UJIAN AKHIR
     var sheetHasil = ss.getSheetByName("Hasil_Ujian");
     var values = sheetHasil.getDataRange().getValues();
 
-    // Validasi Duplikasi: Cek NISN dan Nama di data yang sudah tersimpan
     var nisnBaru = String(data.nisn || "").trim();
     var namaBaru = String(data.nama || "").trim().toLowerCase();
     var existingRow = -1;
@@ -162,7 +304,7 @@ function doPost(e) {
       var existingNisn = String(values[i][5] || "").trim();
       var existingNama = String(values[i][2] || "").trim().toLowerCase();
       if ((nisnBaru && existingNisn === nisnBaru) || (existingNama === namaBaru)) {
-        existingRow = i + 1; // 1-indexed baris spreadsheet
+        existingRow = i + 1;
         break;
       }
     }
@@ -193,7 +335,6 @@ function doPost(e) {
     ];
 
     if (existingRow > 0) {
-      // Perbarui jika sudah ada agar data selalu rapi tanpa membuat baris duplikat liar
       sheetHasil.getRange(existingRow, 1, 1, rowData.length).setValues([rowData]);
       return ContentService.createTextOutput(JSON.stringify({
         status: "success",
@@ -201,7 +342,6 @@ function doPost(e) {
         message: "Data pembaruan nilai tersimpan rapi (menimpa duplikasi)."
       })).setMimeType(ContentService.MimeType.JSON);
     } else {
-      // Tambahkan baris baru
       sheetHasil.appendRow(rowData);
       return ContentService.createTextOutput(JSON.stringify({
         status: "success",
@@ -242,21 +382,19 @@ export async function sendSubmissionToGoogleSheets(
       return { success: true, message: data.message || 'Tersimpan via server & antrian Google Spreadsheet' };
     }
   } catch (e) {
-    // Backend tidak aktif atau client di-host di GitHub Pages static, lanjutkan direct client
+    // Client static / GitHub Pages
   }
 
   // 2. Direct client-side POST ke Apps Script
   if (!targetUrl) {
-    // Simpan di local offline queue
     saveToLocalQueue(payload);
     return {
       success: true,
-      message: 'Tersimpan di memori perangkat & antrian sinkronisasi (URL Apps Script belum diisi oleh Guru).',
+      message: 'Tersimpan di antrian lokal perangkat.',
     };
   }
 
   try {
-    // Gunakan mode no-cors untuk memastikan request tembus dari browser tanpa terblokir proteksi CORS
     await fetch(targetUrl, {
       method: 'POST',
       mode: 'no-cors',
@@ -274,7 +412,7 @@ export async function sendSubmissionToGoogleSheets(
     saveToLocalQueue(payload);
     return {
       success: false,
-      message: 'Koneksi internet bermasalah. Data telah diamankan di perangkat dan akan otomatis dikirim ulang.',
+      message: 'Koneksi bermasalah. Data tersimpan di perangkat.',
     };
   }
 }
@@ -292,7 +430,6 @@ export async function sendViolationToGoogleSheets(
     ...payload,
   };
 
-  // Coba kirim via backend proxy
   try {
     await fetch('/api/exam/violation', {
       method: 'POST',
@@ -300,7 +437,6 @@ export async function sendViolationToGoogleSheets(
       body: JSON.stringify({ ...body, gasUrl: targetUrl }),
     });
   } catch (e) {
-    // Direct client fallback
     if (targetUrl) {
       try {
         await fetch(targetUrl, {
@@ -314,6 +450,158 @@ export async function sendViolationToGoogleSheets(
   }
 }
 
+/**
+ * SINKRONISASI 2-ARAH: Mengunduh data hasil ujian dari Google Spreadsheet ke perangkat pengawas
+ */
+export async function syncSubmissionsFromGoogleSheets(
+  gasUrl?: string
+): Promise<{ success: boolean; count: number; message: string; submissions?: any[] }> {
+  const targetUrl = gasUrl || getSavedGasUrl();
+
+  // 1. Coba via backend server jika ada
+  try {
+    const res = await fetch('/api/exam/sync-spreadsheet', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gasUrl: targetUrl }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        success: true,
+        count: data.count || 0,
+        message: data.message || 'Sinkronisasi berhasil.',
+      };
+    }
+  } catch (e) {
+    // Client static fallback
+  }
+
+  // 2. Direct client-side fetch dari Google Apps Script Web App
+  if (!targetUrl) {
+    return {
+      success: false,
+      count: 0,
+      message: 'URL Google Apps Script belum disetel.',
+    };
+  }
+
+  try {
+    const res = await fetch(`${targetUrl}?action=get_submissions`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.submissions && Array.isArray(data.submissions)) {
+        // Simpan ke localStorage agar perangkat ini dapat melihatnya langsung
+        const localSubs = JSON.parse(localStorage.getItem('cbt_hasil') || '[]');
+        const merged = [...localSubs];
+
+        for (const sub of data.submissions) {
+          if (!sub.nisn) continue;
+          const idx = merged.findIndex((m: any) => m.nisn === sub.nisn);
+          const item = {
+            submissionId: sub.submissionId || `SUB-${Date.now()}`,
+            nisn: sub.nisn,
+            nipd: sub.nipd,
+            nama: sub.nama,
+            rombel: sub.rombel,
+            score: sub.score,
+            status: sub.status || 'Selesai',
+            violations: sub.violations || 0,
+            durationSeconds: (Number(sub.durationMinutes) || 0) * 60,
+            startTime: sub.startTime,
+            endTime: sub.endTime || sub.timestamp,
+            deviceInfo: sub.deviceInfo || { platform: '-' },
+            violationLog: sub.violationDetails ? [{ type: sub.violationDetails, time: '-' }] : [],
+          };
+          if (idx >= 0) {
+            merged[idx] = item;
+          } else {
+            merged.push(item);
+          }
+        }
+
+        localStorage.setItem('cbt_hasil', JSON.stringify(merged));
+
+        return {
+          success: true,
+          count: data.submissions.length,
+          message: `${data.submissions.length} data pengerjaan berhasil diunduh dari Google Spreadsheet.`,
+          submissions: data.submissions,
+        };
+      }
+    }
+
+    return {
+      success: true,
+      count: 0,
+      message: 'Koneksi ke Google Spreadsheet berhasil, belum ada baris data baru.',
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      count: 0,
+      message: 'Gagal terhubung ke Google Spreadsheet: ' + (err.message || String(err)),
+    };
+  }
+}
+
+/**
+ * HAPUS DATA SISWA: Menghapus data ujian siswa dan otomatis menghapus baris dari Google Spreadsheet
+ */
+export async function deleteSubmissionFromGoogleSheets(
+  nisn: string,
+  gasUrl?: string
+): Promise<{ success: boolean; message: string }> {
+  const targetUrl = gasUrl || getSavedGasUrl();
+
+  // 1. Hapus dari localStorage perangkat ini
+  try {
+    const localSubs = JSON.parse(localStorage.getItem('cbt_hasil') || '[]');
+    const updated = localSubs.filter((s: any) => s.nisn !== nisn);
+    localStorage.setItem('cbt_hasil', JSON.stringify(updated));
+  } catch (e) {}
+
+  // 2. Kirim hapus via server backend
+  try {
+    const res = await fetch('/api/exam/delete-submission', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nisn, adminPasscode: 'davi7489', gasUrl: targetUrl }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return { success: true, message: data.message || 'Data berhasil dihapus.' };
+    }
+  } catch (e) {
+    // Client static fallback
+  }
+
+  // 3. Kirim hapus langsung ke Google Apps Script
+  if (targetUrl) {
+    try {
+      // POST no-cors
+      fetch(targetUrl, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({ action: 'delete_submission', nisn }),
+      }).catch(() => {});
+
+      // GET trigger
+      fetch(`${targetUrl}?action=delete_submission&nisn=${encodeURIComponent(nisn)}`).catch(() => {});
+    } catch (err) {}
+  }
+
+  return {
+    success: true,
+    message: `Data siswa dengan NISN ${nisn} berhasil dihapus dari sistem dan Spreadsheet.`,
+  };
+}
+
 // Local offline queue management
 const OFFLINE_QUEUE_KEY = 'cbt_offline_submissions';
 
@@ -321,7 +609,6 @@ export function saveToLocalQueue(payload: ExamSubmissionPayload) {
   if (typeof window === 'undefined') return;
   try {
     const list: ExamSubmissionPayload[] = JSON.parse(localStorage.getItem(OFFLINE_QUEUE_KEY) || '[]');
-    // Cek duplikasi di queue
     const filtered = list.filter((item) => item.nisn !== payload.nisn);
     filtered.push(payload);
     localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(filtered));

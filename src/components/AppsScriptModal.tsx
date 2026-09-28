@@ -236,6 +236,9 @@ export const AppsScriptModal: React.FC<AppsScriptModalProps> = ({
                   <li>
                     Tempelkan URL tersebut ke kolom di atas dan klik <strong>Simpan URL</strong>.
                   </li>
+                  <li className="pt-1.5 text-blue-900 font-semibold bg-blue-50/80 p-2.5 rounded-lg border border-blue-200">
+                    💡 <strong>Tips Memperbarui Skrip (Jika sudah pernah deploy):</strong> Buka editor Apps Script Anda, tempel kode Versi 2 di bawah, klik <strong>Deploy</strong> &rarr; <strong>Manage Deployments</strong> &rarr; klik ikon <strong>Pensil (Edit)</strong> &rarr; pilih Version: <strong>New Version</strong> &rarr; klik <strong>Deploy</strong>. URL Anda tidak akan berubah!
+                  </li>
                 </ol>
               </div>
 

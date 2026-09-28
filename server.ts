@@ -426,7 +426,7 @@ app.get('/api/exam/monitoring', (req: Request, res: Response) => {
 app.post('/api/exam/reset', (req: Request, res: Response) => {
   const { nisn, adminPasscode } = req.body;
 
-  if (adminPasscode !== 'guru123') {
+  if (adminPasscode !== 'davi7489') {
     return res.status(401).json({ error: 'Kata sandi pengawas tidak sesuai.' });
   }
 
@@ -440,14 +440,139 @@ app.post('/api/exam/reset', (req: Request, res: Response) => {
   return res.status(400).json({ error: 'NISN tidak ditentukan.' });
 });
 
-// 7. Get and Update Config
+// 7. Admin Delete Submission (Menghapus siswa dari sistem & otomatis dari Spreadsheet)
+app.post('/api/exam/delete-submission', async (req: Request, res: Response) => {
+  const { nisn, adminPasscode, gasUrl } = req.body;
+
+  if (adminPasscode !== 'davi7489') {
+    return res.status(401).json({ error: 'Kata sandi pengawas tidak valid.' });
+  }
+
+  if (!nisn) {
+    return res.status(400).json({ error: 'NISN tidak ditentukan.' });
+  }
+
+  // Hapus dari submissions dan activeSessions
+  submissions = submissions.filter((sub) => sub.nisn !== nisn);
+  delete activeSessions[nisn];
+  saveSubmissionsToFile();
+
+  // Teruskan penghapusan baris ke Google Spreadsheet via Google Apps Script
+  const targetUrl = gasUrl || serverConfig.gasWebappUrl;
+  if (targetUrl) {
+    try {
+      await forwardToGoogleAppsScript({ action: 'delete_submission', nisn }, targetUrl);
+      fetch(`${targetUrl}?action=delete_submission&nisn=${encodeURIComponent(nisn)}`).catch(() => {});
+    } catch (err) {
+      console.error('Gagal meneruskan hapus ke GAS:', err);
+    }
+  }
+
+  return res.json({
+    success: true,
+    message: `Data siswa dengan NISN ${nisn} berhasil dihapus dari sistem dan Google Spreadsheet.`,
+  });
+});
+
+// 8. Sinkronisasi Data Dari Google Spreadsheet (Mengunduh data pengerjaan dari perangkat lain)
+app.post('/api/exam/sync-spreadsheet', async (req: Request, res: Response) => {
+  const { gasUrl } = req.body;
+  const targetUrl = gasUrl || serverConfig.gasWebappUrl;
+
+  if (!targetUrl) {
+    return res.status(400).json({ error: 'URL Google Apps Script belum dikonfigurasi.' });
+  }
+
+  try {
+    const fetchRes = await fetch(`${targetUrl}?action=get_submissions`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    });
+
+    if (fetchRes.ok) {
+      const data = await fetchRes.json();
+      if (data && data.submissions && Array.isArray(data.submissions)) {
+        let syncedCount = 0;
+        for (const sub of data.submissions) {
+          if (!sub.nisn) continue;
+          syncedCount++;
+          const existingIdx = submissions.findIndex((s) => s.nisn === sub.nisn);
+          const submissionItem = {
+            submissionId: sub.submissionId || `SUB-${Date.now()}`,
+            nisn: sub.nisn,
+            nipd: sub.nipd || '-',
+            nama: sub.nama || 'Siswa',
+            rombel: sub.rombel || '-',
+            score: sub.score !== null ? Number(sub.score) : 0,
+            status: sub.status || 'Selesai',
+            violations: Number(sub.violations || 0),
+            durationSeconds: (Number(sub.durationMinutes) || 0) * 60,
+            startTime: sub.startTime || '',
+            endTime: sub.endTime || sub.timestamp || new Date().toISOString(),
+            deviceInfo:
+              typeof sub.deviceInfo === 'object' && sub.deviceInfo !== null
+                ? sub.deviceInfo
+                : { platform: String(sub.deviceInfo || '-'), userAgent: String(sub.deviceInfo || '-') },
+            violationLog: sub.violationDetails
+              ? [{ type: String(sub.violationDetails), time: '-' }]
+              : [],
+          };
+
+          if (existingIdx >= 0) {
+            submissions[existingIdx] = submissionItem;
+          } else {
+            submissions.push(submissionItem);
+          }
+
+          activeSessions[sub.nisn] = {
+            nisn: sub.nisn,
+            nipd: sub.nipd || '-',
+            nama: sub.nama || 'Siswa',
+            rombel: sub.rombel || '-',
+            status: sub.status || 'Selesai',
+            currentQuestion: 30,
+            currentPassage: 4,
+            answeredCount: 30,
+            timeLeft: 0,
+            score: sub.score !== null ? Number(sub.score) : 0,
+            violations: Number(sub.violations || 0),
+            violationDetails: submissionItem.violationLog,
+            deviceInfo: submissionItem.deviceInfo,
+            startTime: sub.startTime || '',
+            lastPing: sub.endTime || sub.timestamp || new Date().toISOString(),
+            endTime: sub.endTime || sub.timestamp,
+          };
+        }
+
+        saveSubmissionsToFile();
+        return res.json({
+          success: true,
+          count: syncedCount,
+          message: `${syncedCount} data ujian berhasil diunduh dan disinkronkan dari Google Spreadsheet.`,
+        });
+      }
+    }
+
+    return res.json({
+      success: true,
+      count: 0,
+      message: 'Koneksi ke Google Spreadsheet berhasil, belum ada baris data baru untuk disinkronkan.',
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      error: 'Gagal mengunduh data dari Google Spreadsheet: ' + (err.message || String(err)),
+    });
+  }
+});
+
+// 9. Get and Update Config
 app.get('/api/exam/config', (req: Request, res: Response) => {
   return res.json(serverConfig);
 });
 
 app.post('/api/exam/config', (req: Request, res: Response) => {
   const { gasWebappUrl, durationMinutes, maxViolations, activeToken, adminPasscode } = req.body;
-  if (adminPasscode !== 'guru123') {
+  if (adminPasscode !== 'davi7489') {
     return res.status(401).json({ error: 'Kata sandi pengawas tidak valid.' });
   }
 

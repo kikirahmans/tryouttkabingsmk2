@@ -19,9 +19,15 @@ import {
   KeyRound,
   Copy,
   Sparkles,
+  CloudDownload,
+  Trash2,
 } from 'lucide-react';
 import { ROMBEL_LIST, STUDENTS_DATA } from '../data/studentsData';
 import { EXAM_CONFIG } from '../data/cbtQuestions';
+import {
+  syncSubmissionsFromGoogleSheets,
+  deleteSubmissionFromGoogleSheets,
+} from '../services/googleSheetsService';
 
 interface AdminDashboardProps {
   onBackToHome: () => void;
@@ -60,13 +66,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [selectedStatusFilter, setSelectedStatusFilter] = useState<string>('all');
   const [isAutoRefresh, setIsAutoRefresh] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+
   const [selectedStudentLog, setSelectedStudentLog] = useState<any | null>(null);
   const [resetConfirmNisn, setResetConfirmNisn] = useState<string | null>(null);
+  const [deleteConfirmStudent, setDeleteConfirmStudent] = useState<any | null>(null);
+
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(
     null
   );
 
-  // Password verification
+  // Password verification (Kata Sandi Baru: davi7489)
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     if (passwordInput === EXAM_CONFIG.adminPasscode) {
@@ -151,6 +162,59 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return () => clearInterval(interval);
   }, [isAuthenticated, isAutoRefresh]);
 
+  // SINKRONISASI DARI SPREADSHEET (MENGUNDUH DATA DARI SPREADSHEET KE DEVICE LAIN)
+  const handleSyncSpreadsheet = async () => {
+    setIsSyncing(true);
+    try {
+      const res = await syncSubmissionsFromGoogleSheets();
+      if (res.success) {
+        setNotification({
+          type: 'success',
+          message: res.message || 'Sinkronisasi berhasil! Data terupdate dari Spreadsheet.',
+        });
+      } else {
+        setNotification({
+          type: 'error',
+          message: res.message || 'Gagal menyinkronkan data dari Spreadsheet.',
+        });
+      }
+    } catch (err: any) {
+      setNotification({
+        type: 'error',
+        message: 'Gagal mengunduh data: ' + (err.message || String(err)),
+      });
+    }
+
+    await fetchMonitoringData();
+    setIsSyncing(false);
+    setTimeout(() => setNotification(null), 5000);
+  };
+
+  // HAPUS SISWA & HAPUS OTOMATIS PADA SPREADSHEET
+  const handleDeleteStudent = async (student: any) => {
+    if (!student || !student.nisn) return;
+    setIsDeleting(true);
+    try {
+      const res = await deleteSubmissionFromGoogleSheets(student.nisn);
+      setNotification({
+        type: 'success',
+        message:
+          res.message ||
+          `Data siswa ${student.nama} (${student.nisn}) berhasil dihapus dari sistem & Spreadsheet.`,
+      });
+    } catch (err: any) {
+      setNotification({
+        type: 'error',
+        message: 'Gagal menghapus data: ' + (err.message || String(err)),
+      });
+    }
+
+    setDeleteConfirmStudent(null);
+    setIsDeleting(false);
+    await fetchMonitoringData();
+    setTimeout(() => setNotification(null), 5000);
+  };
+
   // Token Management
   const handleSaveToken = async (newToken: string) => {
     const clean = newToken.trim().toUpperCase();
@@ -211,7 +275,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     });
   }, [studentsData, searchQuery, selectedRombelFilter, selectedStatusFilter]);
 
-  // Reset Student Session
+  // Reset Student Session (Memungkinkan siswa login kembali)
   const handleResetSession = async (nisn: string) => {
     try {
       const res = await fetch('/api/exam/reset', {
@@ -365,7 +429,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center flex-wrap gap-2">
+            {/* Tombol Singkronkan Data dari Google Spreadsheet (Unduh ke device ini) */}
+            <button
+              onClick={handleSyncSpreadsheet}
+              disabled={isSyncing}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors"
+              title="Unduh dan sinkronkan data hasil ujian dari Google Spreadsheet ke perangkat ini"
+            >
+              <CloudDownload className={`w-3.5 h-3.5 ${isSyncing ? 'animate-bounce' : ''}`} />
+              <span>{isSyncing ? 'Menyinkronkan...' : 'Singkronkan Data'}</span>
+            </button>
+
             {/* Auto refresh badge */}
             <button
               onClick={() => setIsAutoRefresh(!isAutoRefresh)}
@@ -389,7 +464,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-blue-400' : ''}`} />
             </button>
 
-            {/* Apps Script setup button - HANYA BISA DIAKSES DARI SINI */}
+            {/* Apps Script setup button */}
             <button
               onClick={onOpenAppsScript}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors"
@@ -421,7 +496,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 : 'bg-rose-100 text-rose-900 border border-rose-300'
             }`}
           >
-            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
             <span>{notification.message}</span>
           </div>
         )}
@@ -499,17 +574,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </button>
               </>
             )}
-          </div>
-        </div>
-
-        {/* Notice: Requirement 1 */}
-        <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 flex items-start gap-3 text-xs leading-relaxed">
-          <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-          <div>
-            <strong className="font-bold text-amber-950 block">
-              Kebijakan Keamanan CBT:
-            </strong>
-            Jika siswa melakukan 3 kali atau lebih pelanggaran (berpindah aplikasi, minimalkan tab, keluar fullscreen), <strong>soal tidak akan terkunci</strong> agar siswa tetap dapat menuntaskan ujian. Namun, seluruh jumlah dan waktu pelanggaran tetap <strong>tercatat real-time di bawah ini</strong> dan dikirim langsung ke Google Spreadsheet.
           </div>
         </div>
 
@@ -772,6 +836,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               <RotateCcw className="w-3.5 h-3.5" />
                             </button>
                           )}
+
+                          {/* Delete Student Submission Button (Menghapus siswa dari sistem & otomatis dari Spreadsheet) */}
+                          {(isDoing || isSubmitted || student.violations > 0) && (
+                            <button
+                              onClick={() => setDeleteConfirmStudent(student)}
+                              className="p-1.5 rounded-lg hover:bg-rose-100 text-rose-600 transition-colors"
+                              title="Hapus Data Siswa & Hapus Baris di Spreadsheet"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -909,6 +984,58 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 className="flex-1 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shadow-xs"
               >
                 Ya, Reset Sesi
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal (Menghapus siswa & otomatis terhapus pada Spreadsheet) */}
+      {deleteConfirmStudent && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-rose-950/70 backdrop-blur-xs animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-rose-300 text-center space-y-4">
+            <div className="w-14 h-14 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+              <Trash2 className="w-7 h-7" />
+            </div>
+            <div>
+              <h3 className="font-black text-rose-950 text-base sm:text-lg">
+                Hapus Data Siswa & Spreadsheet
+              </h3>
+              <p className="text-xs text-slate-600 mt-2 leading-relaxed">
+                Apakah Anda yakin ingin menghapus data ujian untuk siswa{' '}
+                <strong className="text-slate-900 font-bold block mt-1 text-sm">
+                  {deleteConfirmStudent.nama} ({deleteConfirmStudent.nisn})
+                </strong>
+                Data nilai, jawaban, dan log pelanggaran akan dihapus dari sistem serta{' '}
+                <strong className="text-rose-700">otomatis dihapus dari baris Google Spreadsheet</strong>.
+              </p>
+            </div>
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-left text-[11px] text-rose-800 space-y-1">
+              <div>• Baris data pada sheet <strong>Hasil_Ujian</strong> akan dihapus.</div>
+              <div>• Catatan pelanggaran pada sheet <strong>Log_Pelanggaran</strong> akan dihapus.</div>
+              <div>• Status siswa akan kembali menjadi <strong>Belum Mulai</strong>.</div>
+            </div>
+            <div className="flex gap-2.5 pt-1">
+              <button
+                onClick={() => setDeleteConfirmStudent(null)}
+                disabled={isDeleting}
+                className="flex-1 py-2.5 rounded-xl border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors"
+              >
+                Batal
+              </button>
+              <button
+                onClick={() => handleDeleteStudent(deleteConfirmStudent)}
+                disabled={isDeleting}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-bold shadow-md transition-colors flex items-center justify-center gap-1.5"
+              >
+                {isDeleting ? (
+                  <span>Menghapus...</span>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Ya, Hapus Data</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

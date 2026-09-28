@@ -24,7 +24,7 @@ export const EXAM_CONFIG = {
   durationMinutes: 90,
   durationSeconds: 90 * 60,
   maxViolations: 3,
-  adminPasscode: 'guru123',
+  adminPasscode: 'davi7489',
   defaultToken: 'TKA2026',
 };
 
