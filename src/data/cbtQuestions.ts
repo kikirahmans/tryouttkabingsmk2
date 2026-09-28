@@ -563,3 +563,19 @@ export function calculateScore(answers: Record<number, any>): number {
   }
   return Math.round((totalPoints / QUESTIONS.length) * 100);
 }
+
+export function isQuestionAnswered(q: Question, answer: any): boolean {
+  if (answer === undefined || answer === null) return false;
+  if (q.type === 'single') {
+    return typeof answer === 'string' && answer.trim().length > 0;
+  }
+  if (q.type === 'multi') {
+    return Array.isArray(answer) && answer.length > 0;
+  }
+  if (q.type === 'table') {
+    const requiredRows = q.rows?.length || 3;
+    if (!Array.isArray(answer) || answer.length < requiredRows) return false;
+    return answer.every((val) => val !== null && val !== undefined && val !== '');
+  }
+  return false;
+}

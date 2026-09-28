@@ -11,9 +11,19 @@ import {
   HelpCircle,
   Maximize2,
   FileText,
+  AlertCircle,
+  ArrowRight,
+  CheckCircle2,
 } from 'lucide-react';
 import { Student } from '../data/studentsData';
-import { PASSAGES, QUESTIONS, EXAM_CONFIG, calculateScore, Question } from '../data/cbtQuestions';
+import {
+  PASSAGES,
+  QUESTIONS,
+  EXAM_CONFIG,
+  calculateScore,
+  isQuestionAnswered,
+  Question,
+} from '../data/cbtQuestions';
 import { QuestionGridModal } from './QuestionGridModal';
 import {
   ExamSubmissionPayload,
@@ -59,6 +69,7 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({
   const [showGridModal, setShowGridModal] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [showConfirmSubmit, setShowConfirmSubmit] = useState<boolean>(false);
+  const [showIncompleteModal, setShowIncompleteModal] = useState<boolean>(false);
 
   const startTimeRef = useRef<string>(new Date().toISOString());
   const lastViolationTimeRef = useRef<number>(0);
@@ -70,6 +81,29 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({
       (q) => q.id >= currentPassage.range[0] && q.id <= currentPassage.range[1]
     );
   }, [currentPassageIdx]);
+
+  // Lompat langsung ke nomor soal tertentu & buka bacaan terkait
+  const jumpToQuestion = (qId: number) => {
+    const passage = PASSAGES.find((p) => qId >= p.range[0] && qId <= p.range[1]);
+    if (passage) {
+      const idx = PASSAGES.indexOf(passage);
+      setCurrentPassageIdx(idx);
+      setTimeout(() => {
+        const el = document.getElementById(`question-${qId}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 150);
+    }
+  };
+
+  // Hitung soal yang belum terjawab & pastikan seluruh 30 soal wajib selesai
+  const unansweredQuestions = useMemo(() => {
+    return QUESTIONS.filter((q) => !isQuestionAnswered(q, answers[q.id]));
+  }, [answers]);
+
+  const totalAnswered = QUESTIONS.length - unansweredQuestions.length;
+  const isAllAnswered = unansweredQuestions.length === 0;
 
   // Request fullscreen on mount
   useEffect(() => {
@@ -279,6 +313,14 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({
   // Submit Final Exam
   const handleFinish = async (status: 'Selesai' | 'Didiskualifikasi' | 'Waktu Habis') => {
     if (isFinishedRef.current) return;
+
+    // KETENTUAN KETAT: Siswa TIDAK BISA mengakhiri ujian secara manual sebelum menjawab SEMUA 30 soal!
+    if (status === 'Selesai' && unansweredQuestions.length > 0) {
+      setShowConfirmSubmit(false);
+      setShowIncompleteModal(true);
+      return;
+    }
+
     isFinishedRef.current = true;
     setIsSubmitting(true);
 
@@ -328,15 +370,6 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({
     setIsSubmitting(false);
     onFinishExam(payload);
   };
-
-  // Total questions answered count
-  const totalAnswered = useMemo(() => {
-    return Object.keys(answers).filter((k) => {
-      const val = answers[Number(k)];
-      if (Array.isArray(val)) return val.length > 0;
-      return val !== undefined && val !== null;
-    }).length;
-  }, [answers]);
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col justify-between select-none relative pb-20 sm:pb-24">
@@ -411,9 +444,7 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({
               (q) =>
                 q.id >= p.range[0] &&
                 q.id <= p.range[1] &&
-                answers[q.id] !== undefined &&
-                answers[q.id] !== null &&
-                (!Array.isArray(answers[q.id]) || answers[q.id].length > 0)
+                isQuestionAnswered(q, answers[q.id])
             ).length;
             const totalInPassage = p.range[1] - p.range[0] + 1;
 
@@ -620,11 +651,27 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({
 
           {/* Submit Button */}
           <button
-            onClick={() => setShowConfirmSubmit(true)}
-            className="flex items-center gap-1.5 px-4 py-2 text-xs sm:text-sm font-bold rounded-xl bg-rose-600 hover:bg-rose-700 text-white shadow-xs transition-colors"
+            onClick={() => {
+              if (!isAllAnswered) {
+                setShowIncompleteModal(true);
+              } else {
+                setShowConfirmSubmit(true);
+              }
+            }}
+            className={`flex items-center gap-1.5 px-3.5 sm:px-4 py-2 text-xs sm:text-sm font-bold rounded-xl transition-all shadow-xs ${
+              isAllAnswered
+                ? 'bg-emerald-600 hover:bg-emerald-700 text-white ring-2 ring-emerald-300 animate-pulse'
+                : 'bg-rose-600 hover:bg-rose-700 text-white'
+            }`}
           >
-            <Send className="w-3.5 h-3.5" />
-            <span>Kumpulkan Ujian</span>
+            {isAllAnswered ? (
+              <CheckCircle className="w-3.5 h-3.5" />
+            ) : (
+              <Send className="w-3.5 h-3.5" />
+            )}
+            <span>
+              {isAllAnswered ? 'Kumpulkan Ujian (30/30)' : `Kumpulkan (${totalAnswered}/30)`}
+            </span>
           </button>
 
           {/* Next Passage */}
@@ -651,42 +698,127 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({
         answers={answers}
         currentQuestionId={questionsInPassage[0]?.id || 1}
         onSelectQuestion={(qId) => {
-          const passage = PASSAGES.find((p) => qId >= p.range[0] && qId <= p.range[1]);
-          if (passage) {
-            const idx = PASSAGES.indexOf(passage);
-            setCurrentPassageIdx(idx);
-            setTimeout(() => {
-              const el = document.getElementById(`question-${qId}`);
-              if (el) el.scrollIntoView({ behavior: 'smooth' });
-            }, 150);
-          }
+          jumpToQuestion(qId);
         }}
       />
 
-      {/* Confirm Submit Modal */}
-      {showConfirmSubmit && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-slate-200 text-center space-y-4">
-            <div className="w-12 h-12 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center mx-auto">
-              <CheckCircle className="w-6 h-6" />
+      {/* Incomplete Questions Blocking Modal (Mencegah siswa mengakhiri sebelum jawab semua soal) */}
+      {showIncompleteModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-rose-300 text-center space-y-4 max-h-[90vh] flex flex-col">
+            <div className="w-14 h-14 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center mx-auto shrink-0 shadow-inner">
+              <AlertCircle className="w-8 h-8" />
             </div>
+
             <div>
-              <h3 className="font-bold text-slate-900 text-base">Konfirmasi Pengumpulan Ujian</h3>
-              <p className="text-xs text-slate-500 mt-1">
-                Anda telah menjawab{' '}
-                <strong className="text-blue-600 font-bold">{totalAnswered}</strong> dari{' '}
-                <strong>{QUESTIONS.length}</strong> soal.
+              <h3 className="font-black text-slate-900 text-base sm:text-lg">
+                Belum Bisa Mengakhiri Ujian!
+              </h3>
+              <p className="text-xs text-slate-600 mt-1.5 leading-relaxed">
+                Anda wajib menjawab seluruh <strong className="text-slate-900 font-bold">30 soal</strong> sebelum dapat mengakhiri dan mengumpulkan ujian ini.
               </p>
-              {totalAnswered < QUESTIONS.length && (
-                <div className="mt-2 p-2 bg-amber-50 border border-amber-200 rounded-lg text-[11px] text-amber-800">
-                  ⚠️ Masih ada {QUESTIONS.length - totalAnswered} soal yang belum dijawab!
-                </div>
+            </div>
+
+            {/* Progress Bar Card */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5 space-y-2 text-left shrink-0">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold text-slate-700">Progres Jawaban</span>
+                <span className="font-bold text-blue-600">
+                  {totalAnswered} / {QUESTIONS.length} Soal ({Math.round((totalAnswered / QUESTIONS.length) * 100)}%)
+                </span>
+              </div>
+              <div className="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden">
+                <div
+                  className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
+                  style={{ width: `${(totalAnswered / QUESTIONS.length) * 100}%` }}
+                ></div>
+              </div>
+              <div className="text-[11px] text-rose-600 font-semibold flex items-center gap-1">
+                <span>⚠️ Masih ada {unansweredQuestions.length} soal yang belum dijawab.</span>
+              </div>
+            </div>
+
+            {/* Unanswered Question Numbers List */}
+            <div className="overflow-y-auto space-y-2 text-left flex-1 min-h-0 pr-1">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block">
+                Ketuk nomor soal di bawah untuk langsung menjawab:
+              </span>
+              <div className="flex flex-wrap gap-2">
+                {unansweredQuestions.map((q) => (
+                  <button
+                    key={q.id}
+                    onClick={() => {
+                      setShowIncompleteModal(false);
+                      jumpToQuestion(q.id);
+                    }}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 rounded-xl font-bold text-xs transition-colors hover:scale-105 active:scale-95 cursor-pointer"
+                    title={`Lompat ke Soal #${q.id}`}
+                  >
+                    <span>Soal #{q.id}</span>
+                    <ArrowRight className="w-3 h-3 text-rose-600" />
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Bottom Modal Actions */}
+            <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row gap-2 shrink-0">
+              <button
+                onClick={() => {
+                  setShowIncompleteModal(false);
+                  setShowGridModal(true);
+                }}
+                className="flex-1 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors"
+              >
+                Buka Daftar Soal
+              </button>
+              {unansweredQuestions.length > 0 && (
+                <button
+                  onClick={() => {
+                    setShowIncompleteModal(false);
+                    jumpToQuestion(unansweredQuestions[0].id);
+                  }}
+                  className="flex-1 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md transition-colors flex items-center justify-center gap-1"
+                >
+                  <span>Jawab Soal #{unansweredQuestions[0].id}</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
               )}
             </div>
-            <div className="flex gap-2">
+          </div>
+        </div>
+      )}
+
+      {/* Confirm Submit Modal (Hanya muncul jika SEMUA 30 soal telah dijawab) */}
+      {showConfirmSubmit && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-slate-200 text-center space-y-4">
+            <div className="w-14 h-14 rounded-2xl bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto shadow-inner">
+              <CheckCircle2 className="w-8 h-8" />
+            </div>
+            <div>
+              <h3 className="font-black text-slate-900 text-base sm:text-lg">
+                Konfirmasi Pengumpulan Ujian
+              </h3>
+              <p className="text-xs text-slate-600 mt-1.5 leading-relaxed">
+                Luar biasa! Anda telah menjawab seluruh <strong className="text-emerald-700 font-bold">30 soal</strong> ujian dengan lengkap.
+              </p>
+            </div>
+
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl text-xs text-emerald-800 space-y-1 text-left">
+              <div className="font-semibold flex items-center gap-1 text-emerald-900">
+                <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                <span>30 / 30 Soal Terjawab Lengkap</span>
+              </div>
+              <p className="text-[11px] text-emerald-700">
+                Setelah dikumpulkan, lembar jawaban akan langsung dinilai dan dikirim ke sistem penilaian guru.
+              </p>
+            </div>
+
+            <div className="flex gap-2.5 pt-1">
               <button
                 onClick={() => setShowConfirmSubmit(false)}
-                className="flex-1 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                className="flex-1 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors"
               >
                 Periksa Lagi
               </button>
@@ -696,7 +828,7 @@ export const ExamScreen: React.FC<ExamScreenProps> = ({
                   handleFinish('Selesai');
                 }}
                 disabled={isSubmitting}
-                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-xs"
+                className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md transition-colors disabled:opacity-50"
               >
                 {isSubmitting ? 'Mengirim...' : 'Ya, Kumpulkan'}
               </button>

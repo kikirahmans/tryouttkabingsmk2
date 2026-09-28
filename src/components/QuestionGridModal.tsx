@@ -1,6 +1,6 @@
 import React from 'react';
 import { X, CheckCircle2, Circle } from 'lucide-react';
-import { QUESTIONS } from '../data/cbtQuestions';
+import { QUESTIONS, isQuestionAnswered } from '../data/cbtQuestions';
 
 interface QuestionGridModalProps {
   isOpen: boolean;
@@ -19,16 +19,7 @@ export const QuestionGridModal: React.FC<QuestionGridModalProps> = ({
 }) => {
   if (!isOpen) return null;
 
-  const isQuestionAnswered = (qId: number) => {
-    const a = answers[qId];
-    if (a === undefined || a === null) return false;
-    if (Array.isArray(a)) {
-      return a.length > 0 && a.some((x) => x !== null && x !== undefined);
-    }
-    return String(a).trim().length > 0;
-  };
-
-  const totalAnswered = QUESTIONS.filter((q) => isQuestionAnswered(q.id)).length;
+  const totalAnswered = QUESTIONS.filter((q) => isQuestionAnswered(q, answers[q.id])).length;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs">
@@ -69,7 +60,7 @@ export const QuestionGridModal: React.FC<QuestionGridModalProps> = ({
         <div className="p-4 overflow-y-auto">
           <div className="grid grid-cols-5 sm:grid-cols-6 gap-2.5">
             {QUESTIONS.map((q) => {
-              const answered = isQuestionAnswered(q.id);
+              const answered = isQuestionAnswered(q, answers[q.id]);
               const isCurrent = currentQuestionId === q.id;
 
               return (
