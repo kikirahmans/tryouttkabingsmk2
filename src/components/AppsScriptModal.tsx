@@ -12,6 +12,7 @@ import {
   Github,
 } from 'lucide-react';
 import { GOOGLE_APPS_SCRIPT_CODE, getSavedGasUrl, saveGasUrl } from '../services/googleSheetsService';
+import { EXAM_CONFIG } from '../data/cbtQuestions';
 
 interface AppsScriptModalProps {
   isOpen: boolean;
@@ -45,7 +46,7 @@ export const AppsScriptModal: React.FC<AppsScriptModalProps> = ({
     fetch('/api/exam/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ gasWebappUrl: gasUrlInput.trim(), adminPasscode: 'guru123' }),
+      body: JSON.stringify({ gasWebappUrl: gasUrlInput.trim(), adminPasscode: EXAM_CONFIG.adminPasscode }),
     }).catch(() => {});
   };
 

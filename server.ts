@@ -398,6 +398,7 @@ app.get('/api/exam/monitoring', (req: Request, res: Response) => {
       deviceInfo,
       startTime,
       endTime,
+      durationSeconds: submission ? submission.durationSeconds : (session && session.startTime ? Math.round((Date.now() - new Date(session.startTime).getTime()) / 1000) : null),
     };
   });
 
@@ -493,13 +494,19 @@ app.post('/api/exam/sync-spreadsheet', async (req: Request, res: Response) => {
       const data = await fetchRes.json();
       if (data && data.submissions && Array.isArray(data.submissions)) {
         let syncedCount = 0;
+        const subMap = new Map<string, number>();
+        submissions.forEach((item, index) => {
+          if (item && item.nisn) subMap.set(String(item.nisn).trim(), index);
+        });
+
         for (const sub of data.submissions) {
           if (!sub.nisn) continue;
           syncedCount++;
-          const existingIdx = submissions.findIndex((s) => s.nisn === sub.nisn);
+          const nisnKey = String(sub.nisn).trim();
+          const existingIdx = subMap.has(nisnKey) ? subMap.get(nisnKey)! : -1;
           const submissionItem = {
             submissionId: sub.submissionId || `SUB-${Date.now()}`,
-            nisn: sub.nisn,
+            nisn: nisnKey,
             nipd: sub.nipd || '-',
             nama: sub.nama || 'Siswa',
             rombel: sub.rombel || '-',
@@ -522,6 +529,7 @@ app.post('/api/exam/sync-spreadsheet', async (req: Request, res: Response) => {
             submissions[existingIdx] = submissionItem;
           } else {
             submissions.push(submissionItem);
+            subMap.set(nisnKey, submissions.length - 1);
           }
 
           activeSessions[sub.nisn] = {
@@ -548,6 +556,7 @@ app.post('/api/exam/sync-spreadsheet', async (req: Request, res: Response) => {
         return res.json({
           success: true,
           count: syncedCount,
+          submissions: submissions,
           message: `${syncedCount} data ujian berhasil diunduh dan disinkronkan dari Google Spreadsheet.`,
         });
       }

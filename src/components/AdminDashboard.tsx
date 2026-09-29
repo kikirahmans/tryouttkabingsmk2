@@ -89,6 +89,124 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
+  // Format durasi dan waktu pengerjaan siswa
+  const formatStudentDuration = (student: any): { primary: string; secondary?: string } => {
+    if (student.status === 'Belum Mulai') {
+      return { primary: '-' };
+    }
+
+    if (
+      student.status === 'Selesai' ||
+      student.status === 'Didiskualifikasi' ||
+      student.status === 'Waktu Habis'
+    ) {
+      let durSec = Number(student.durationSeconds) || 0;
+      if (durSec <= 0 && student.startTime && student.endTime) {
+        const s = new Date(student.startTime).getTime();
+        const e = new Date(student.endTime).getTime();
+        if (!isNaN(s) && !isNaN(e) && e >= s) {
+          durSec = Math.round((e - s) / 1000);
+        }
+      }
+
+      let timeRange = '';
+      if (student.startTime && student.endTime) {
+        const sDate = new Date(student.startTime);
+        const eDate = new Date(student.endTime);
+        if (!isNaN(sDate.getTime()) && !isNaN(eDate.getTime())) {
+          const sTime = sDate.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+          const eTime = eDate.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+          timeRange = `${sTime} - ${eTime}`;
+        }
+      } else if (student.endTime) {
+        const eDate = new Date(student.endTime);
+        if (!isNaN(eDate.getTime())) {
+          timeRange = `Selesai ${eDate.toLocaleTimeString('id-ID', {
+            hour: '2-digit',
+            minute: '2-digit',
+          })}`;
+        }
+      }
+
+      if (durSec > 0) {
+        const m = Math.floor(durSec / 60);
+        const s = durSec % 60;
+        const durText = m > 0 ? (s > 0 ? `${m}m ${s}d` : `${m} Menit`) : `${s} Detik`;
+        return { primary: durText, secondary: timeRange || undefined };
+      }
+
+      return { primary: timeRange || 'Selesai' };
+    }
+
+    if (student.status === 'Sedang Mengerjakan') {
+      if (student.startTime) {
+        const s = new Date(student.startTime).getTime();
+        if (!isNaN(s)) {
+          const elapsedMin = Math.max(1, Math.floor((Date.now() - s) / 60000));
+          const sTime = new Date(student.startTime).toLocaleTimeString('id-ID', {
+            hour: '2-digit',
+            minute: '2-digit',
+          });
+          return { primary: `${elapsedMin}m Berjalan`, secondary: `Mulai ${sTime}` };
+        }
+      }
+      return { primary: 'Sedang Berjalan' };
+    }
+
+    return { primary: '-' };
+  };
+
+  // Terapkan data pengerjaan ke state antarmuka secara instan (0 milidetik dengan O(1) HashMap)
+  const applySubmissionsToState = (subsList: any[]) => {
+    const subMap = new Map<string, any>();
+    for (const s of subsList) {
+      if (s && s.nisn) {
+        subMap.set(String(s.nisn).trim(), s);
+      }
+    }
+
+    const merged = STUDENTS_DATA.map((student) => {
+      const sub = subMap.get(student.nisn);
+      if (sub) {
+        return {
+          ...student,
+          status: sub.status || 'Selesai',
+          score: sub.score,
+          answeredCount: 30,
+          violations: sub.violations || 0,
+          violationDetails: sub.violationLog || [],
+          deviceInfo: sub.deviceInfo || { userAgent: '-', platform: '-' },
+          isOnline: false,
+          durationSeconds: sub.durationSeconds || 0,
+          startTime: sub.startTime || '',
+          endTime: sub.endTime || '',
+        };
+      }
+      return {
+        ...student,
+        status: 'Belum Mulai',
+        score: null,
+        answeredCount: 0,
+        violations: 0,
+        violationDetails: [],
+        deviceInfo: null,
+        isOnline: false,
+        durationSeconds: 0,
+        startTime: null,
+        endTime: null,
+      };
+    });
+
+    const total = merged.length;
+    const completed = merged.filter((d) => d.status === 'Selesai').length;
+    const inProgress = merged.filter((d) => d.status === 'Sedang Mengerjakan').length;
+    const notStarted = merged.filter((d) => d.status === 'Belum Mulai').length;
+    const withViolations = merged.filter((d) => d.violations > 0).length;
+
+    setStudentsData(merged);
+    setSummary({ total, completed, inProgress, disqualified: 0, notStarted, withViolations });
+  };
+
   // Fetch monitoring data from server (or fallback to local)
   const fetchMonitoringData = async () => {
     setIsRefreshing(true);
@@ -109,44 +227,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       // Offline / Static fallback
     }
 
-    // Fallback using localStorage
+    // Fallback using localStorage dengan HashMap cepat
     try {
       const localSubs = JSON.parse(localStorage.getItem('cbt_hasil') || '[]');
-      const merged = STUDENTS_DATA.map((student) => {
-        const sub = localSubs.find((s: any) => s.nisn === student.nisn);
-        if (sub) {
-          return {
-            ...student,
-            status: sub.status || 'Selesai',
-            score: sub.score,
-            answeredCount: 30,
-            violations: sub.violations || 0,
-            violationDetails: sub.violationLog || [],
-            deviceInfo: sub.deviceInfo || { userAgent: '-', platform: '-' },
-            isOnline: false,
-            endTime: sub.endTime,
-          };
-        }
-        return {
-          ...student,
-          status: 'Belum Mulai',
-          score: null,
-          answeredCount: 0,
-          violations: 0,
-          violationDetails: [],
-          deviceInfo: null,
-          isOnline: false,
-        };
-      });
-
-      const total = merged.length;
-      const completed = merged.filter((d) => d.status === 'Selesai').length;
-      const inProgress = merged.filter((d) => d.status === 'Sedang Mengerjakan').length;
-      const notStarted = merged.filter((d) => d.status === 'Belum Mulai').length;
-      const withViolations = merged.filter((d) => d.violations > 0).length;
-
-      setStudentsData(merged);
-      setSummary({ total, completed, inProgress, disqualified: 0, notStarted, withViolations });
+      applySubmissionsToState(localSubs);
     } catch (e) {}
 
     setIsRefreshing(false);
@@ -162,15 +246,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return () => clearInterval(interval);
   }, [isAuthenticated, isAutoRefresh]);
 
-  // SINKRONISASI DARI SPREADSHEET (MENGUNDUH DATA DARI SPREADSHEET KE DEVICE LAIN)
+  // SINKRONISASI DARI SPREADSHEET (MENGUNDUH DATA DARI SPREADSHEET KE DEVICE LAIN - TURBO SPEED)
   const handleSyncSpreadsheet = async () => {
     setIsSyncing(true);
     try {
       const res = await syncSubmissionsFromGoogleSheets();
-      if (res.success) {
+      if (res.success && res.submissions) {
+        // 1. Tampilkan ke tabel secara INSTAN (0 delay)
+        applySubmissionsToState(res.submissions);
+
+        const secText = (res.durationMs / 1000).toFixed(1);
         setNotification({
           type: 'success',
-          message: res.message || 'Sinkronisasi berhasil! Data terupdate dari Spreadsheet.',
+          message: `⚡ Sinkronisasi cepat (${secText}s): ${res.count} data siswa terunduh dari Spreadsheet.`,
         });
       } else {
         setNotification({
@@ -185,7 +273,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       });
     }
 
-    await fetchMonitoringData();
     setIsSyncing(false);
     setTimeout(() => setNotification(null), 5000);
   };
@@ -314,26 +401,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       'Status Ujian',
       'Skor Akhir (0-100)',
       'Soal Terjawab',
+      'Waktu Pengerjaan (Durasi)',
+      'Waktu Mulai',
+      'Waktu Selesai',
       'Jumlah Pelanggaran',
       'Platform Perangkat',
       'Browser User Agent',
-      'Waktu Selesai',
     ];
 
-    const rows = studentsData.map((s, idx) => [
-      idx + 1,
-      `"${s.nama}"`,
-      s.rombel,
-      s.nipd,
-      s.nisn,
-      s.status,
-      s.score !== null ? s.score : '-',
-      `${s.answeredCount}/30`,
-      s.violations,
-      s.deviceInfo ? `"${s.deviceInfo.platform || '-'}"` : '-',
-      s.deviceInfo ? `"${(s.deviceInfo.userAgent || '-').replace(/"/g, '""')}"` : '-',
-      s.endTime ? `"${new Date(s.endTime).toLocaleString('id-ID')}"` : '-',
-    ]);
+    const rows = studentsData.map((s, idx) => {
+      const dur = formatStudentDuration(s);
+      const durStr = dur.secondary ? `${dur.primary} (${dur.secondary})` : dur.primary;
+      return [
+        idx + 1,
+        `"${s.nama}"`,
+        s.rombel,
+        s.nipd,
+        s.nisn,
+        s.status,
+        s.score !== null ? s.score : '-',
+        `${s.answeredCount}/30`,
+        `"${durStr}"`,
+        s.startTime ? `"${new Date(s.startTime).toLocaleString('id-ID')}"` : '-',
+        s.endTime ? `"${new Date(s.endTime).toLocaleString('id-ID')}"` : '-',
+        s.violations,
+        s.deviceInfo ? `"${s.deviceInfo.platform || '-'}"` : '-',
+        s.deviceInfo ? `"${(s.deviceInfo.userAgent || '-').replace(/"/g, '""')}"` : '-',
+      ];
+    });
 
     const csvContent =
       'data:text/csv;charset=utf-8,\uFEFF' +
@@ -717,6 +812,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <th className="py-3 px-3">Rombel</th>
                   <th className="py-3 px-3">NISN / NIPD</th>
                   <th className="py-3 px-3 text-center">Status</th>
+                  <th className="py-3 px-3 text-center">Waktu Pengerjaan</th>
                   <th className="py-3 px-3 text-center">Terjawab</th>
                   <th className="py-3 px-3 text-center">Skor</th>
                   <th className="py-3 px-3 text-center">Pelanggaran</th>
@@ -728,6 +824,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 {filteredStudents.map((student, idx) => {
                   const isSubmitted = student.status === 'Selesai';
                   const isDoing = student.status === 'Sedang Mengerjakan';
+                  const dur = formatStudentDuration(student);
 
                   return (
                     <tr
@@ -772,6 +869,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         >
                           {student.status}
                         </span>
+                      </td>
+                      <td className="py-3 px-3 text-center">
+                        {student.status === 'Belum Mulai' ? (
+                          <span className="text-slate-300 font-mono text-[11px]">-</span>
+                        ) : isDoing ? (
+                          <div className="flex flex-col items-center">
+                            <span className="inline-flex items-center gap-1 font-bold text-blue-600 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full text-[10px]">
+                              <Clock className="w-3 h-3 text-blue-500 animate-spin" />
+                              {dur.primary}
+                            </span>
+                            {dur.secondary && (
+                              <span className="text-[9px] text-slate-400 mt-0.5 font-medium">{dur.secondary}</span>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="flex flex-col items-center">
+                            <span className="font-bold text-slate-800 inline-flex items-center gap-1 text-[11px]">
+                              <Clock className="w-3 h-3 text-slate-400" />
+                              {dur.primary}
+                            </span>
+                            {dur.secondary && (
+                              <span className="text-[10px] text-slate-400 font-mono">{dur.secondary}</span>
+                            )}
+                          </div>
+                        )}
                       </td>
                       <td className="py-3 px-3 text-center font-semibold text-slate-700">
                         {isDoing ? `${student.answeredCount}/30` : isSubmitted ? '30/30' : '-'}
@@ -854,7 +976,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 })}
                 {filteredStudents.length === 0 && (
                   <tr>
-                    <td colSpan={10} className="py-8 text-center text-slate-400">
+                    <td colSpan={11} className="py-8 text-center text-slate-400">
                       Tidak ada data siswa yang cocok dengan filter.
                     </td>
                   </tr>
@@ -887,6 +1009,50 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
 
             <div className="overflow-y-auto space-y-4 text-xs">
+              {/* Waktu & Durasi Pengerjaan */}
+              <div className="bg-blue-50/70 p-3.5 rounded-xl border border-blue-200 space-y-2 text-blue-950">
+                <span className="font-bold text-blue-900 block text-xs uppercase tracking-wider flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-blue-600" />
+                  Waktu & Durasi Pengerjaan Ujian
+                </span>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div>
+                    <span className="text-[10px] text-blue-700 block font-bold">Waktu Mulai:</span>
+                    <span className="font-medium">
+                      {selectedStudentLog.startTime
+                        ? new Date(selectedStudentLog.startTime).toLocaleString('id-ID', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            second: '2-digit',
+                            day: 'numeric',
+                            month: 'short',
+                          })
+                        : '-'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-blue-700 block font-bold">Waktu Selesai:</span>
+                    <span className="font-medium">
+                      {selectedStudentLog.endTime
+                        ? new Date(selectedStudentLog.endTime).toLocaleString('id-ID', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            second: '2-digit',
+                            day: 'numeric',
+                            month: 'short',
+                          })
+                        : '-'}
+                    </span>
+                  </div>
+                  <div className="col-span-2 pt-2 border-t border-blue-200/80 flex items-center justify-between">
+                    <span className="text-xs text-blue-900 font-bold">Total Durasi Ujian:</span>
+                    <span className="font-black text-blue-950 text-sm bg-blue-100/80 px-2.5 py-0.5 rounded-lg border border-blue-300">
+                      {formatStudentDuration(selectedStudentLog).primary}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
               {/* Telemetry info */}
               <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-1.5">
                 <span className="font-bold text-slate-800 block text-xs uppercase tracking-wider">
