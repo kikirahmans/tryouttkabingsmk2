@@ -339,12 +339,66 @@ app.post('/api/exam/submit', async (req: Request, res: Response) => {
   });
 });
 
+function normalizeNisn(val: any): string {
+  if (!val) return '';
+  const str = String(val).split('.')[0].replace(/\D/g, '').trim();
+  if (str.length > 0 && str.length < 10) {
+    return str.padStart(10, '0');
+  }
+  return str;
+}
+
+function normalizeName(val: any): string {
+  if (!val) return '';
+  return String(val)
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeNipd(val: any): string {
+  if (!val) return '';
+  return String(val).trim().toLowerCase();
+}
+
 // 5. Admin Monitoring Data (Real-time overview of 294 students)
 app.get('/api/exam/monitoring', (req: Request, res: Response) => {
+  // Bangun indeks submissions berdasarkan NISN, NIPD, dan Nama
+  const subByNisn = new Map<string, any>();
+  const subByNipd = new Map<string, any>();
+  const subByName = new Map<string, any>();
+  const matchedSubs = new Set<any>();
+
+  submissions.forEach((sub) => {
+    if (!sub) return;
+    const normN = normalizeNisn(sub.nisn);
+    const rawN = String(sub.nisn || '').trim();
+    const normP = normalizeNipd(sub.nipd);
+    const normNm = normalizeName(sub.nama);
+    if (normN) subByNisn.set(normN, sub);
+    if (rawN) subByNisn.set(rawN, sub);
+    if (normP && normP !== '-') subByNipd.set(normP, sub);
+    if (normNm) subByName.set(normNm, sub);
+  });
+
   // Gabungkan semua 294 siswa resmi dengan status terkini
   const monitoringData = STUDENTS_DATA.map((student) => {
-    const session = activeSessions[student.nisn];
-    const submission = submissions.find((sub) => sub.nisn === student.nisn);
+    const stdNormN = normalizeNisn(student.nisn);
+    const stdRawN = student.nisn.trim();
+    const stdNormP = normalizeNipd(student.nipd);
+    const stdNormNm = normalizeName(student.nama);
+
+    const session = activeSessions[student.nisn] || (stdNormN ? activeSessions[stdNormN] : undefined);
+    const submission =
+      (stdNormN ? subByNisn.get(stdNormN) : null) ||
+      (stdRawN ? subByNisn.get(stdRawN) : null) ||
+      (stdNormP ? subByNipd.get(stdNormP) : null) ||
+      (stdNormNm ? subByName.get(stdNormNm) : null);
+
+    if (submission) {
+      matchedSubs.add(submission);
+    }
 
     let status = 'Belum Mulai';
     let score = null;
@@ -400,6 +454,32 @@ app.get('/api/exam/monitoring', (req: Request, res: Response) => {
       endTime,
       durationSeconds: submission ? submission.durationSeconds : (session && session.startTime ? Math.round((Date.now() - new Date(session.startTime).getTime()) / 1000) : null),
     };
+  });
+
+  // Tambahkan data submission ekstra jika ada yang tidak terdaftar di 294 siswa
+  let extraNo = STUDENTS_DATA.length + 1;
+  submissions.forEach((sub) => {
+    if (sub && !matchedSubs.has(sub)) {
+      monitoringData.push({
+        no: extraNo++,
+        nama: sub.nama || 'Peserta Tambahan',
+        rombel: sub.rombel || 'Lainnya',
+        nipd: sub.nipd || '-',
+        jk: 'L',
+        nisn: normalizeNisn(sub.nisn) || sub.nisn || `EXT-${Date.now()}`,
+        status: sub.status || 'Selesai',
+        isOnline: false,
+        score: sub.score !== null ? Number(sub.score) : 0,
+        answeredCount: 30,
+        violations: Number(sub.violations || 0),
+        violationDetails: sub.violationLog || [],
+        lastPing: sub.endTime || sub.startTime || null,
+        deviceInfo: sub.deviceInfo || null,
+        startTime: sub.startTime || '',
+        endTime: sub.endTime || '',
+        durationSeconds: sub.durationSeconds || null,
+      });
+    }
   });
 
   const totalStudents = STUDENTS_DATA.length;

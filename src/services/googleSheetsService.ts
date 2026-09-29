@@ -36,6 +36,29 @@ export interface ViolationPayload {
   deviceInfo: string;
 }
 
+export function normalizeNisn(val: any): string {
+  if (!val) return '';
+  const str = String(val).split('.')[0].replace(/\D/g, '').trim();
+  if (str.length > 0 && str.length < 10) {
+    return str.padStart(10, '0');
+  }
+  return str;
+}
+
+export function normalizeName(val: any): string {
+  if (!val) return '';
+  return String(val)
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function normalizeNipd(val: any): string {
+  if (!val) return '';
+  return String(val).trim().toLowerCase();
+}
+
 export const DEFAULT_GAS_URL_KEY = 'cbt_gas_webapp_url';
 export const DEFAULT_GAS_URL =
   'https://script.google.com/macros/s/AKfycbwf-wV8KbUARklU8kkAwT1ZKD1bX36U5W6l2UaiD7Cm44ZKZR4tF5pC-Ng3ocwtdw1d/exec';
@@ -137,15 +160,29 @@ function doGet(e) {
     var list = [];
     for (var i = 0; i < values.length; i++) {
       var r = values[i];
-      var nisnVal = String(r[5] || "").trim();
-      if (nisnVal) {
+      var namaVal = String(r[2] || "").trim();
+      var nipdVal = String(r[4] || "").trim();
+      var rawNisn = String(r[5] !== undefined && r[5] !== null ? r[5] : "").trim();
+      if (rawNisn.indexOf(".") > -1) {
+        rawNisn = rawNisn.split(".")[0];
+      }
+      var digitsOnly = rawNisn.replace(/[^0-9]/g, "");
+      var nisnVal = digitsOnly;
+      if (digitsOnly.length > 0 && digitsOnly.length < 10) {
+        while (nisnVal.length < 10) {
+          nisnVal = "0" + nisnVal;
+        }
+      }
+
+      // Pastikan baris terbaca jika NISN atau Nama atau NIPD tersedia
+      if (nisnVal || namaVal || nipdVal) {
         list.push({
           timestamp: r[0],
           submissionId: r[1],
-          nama: String(r[2] || ""),
+          nama: namaVal,
           rombel: String(r[3] || ""),
-          nipd: String(r[4] || ""),
-          nisn: nisnVal,
+          nipd: nipdVal,
+          nisn: nisnVal || rawNisn,
           score: (r[6] !== "" && r[6] !== null && !isNaN(r[6])) ? Number(r[6]) : null,
           status: String(r[7] || "Selesai"),
           violations: Number(r[8] || 0),
@@ -284,14 +321,28 @@ function doPost(e) {
         var values = sheetHasil.getRange(2, 1, lastRow - 1, 15).getValues();
         for (var i = 0; i < values.length; i++) {
           var r = values[i];
-          if (r[5]) {
+          var namaVal = String(r[2] || "").trim();
+          var nipdVal = String(r[4] || "").trim();
+          var rawNisn = String(r[5] !== undefined && r[5] !== null ? r[5] : "").trim();
+          if (rawNisn.indexOf(".") > -1) {
+            rawNisn = rawNisn.split(".")[0];
+          }
+          var digitsOnly = rawNisn.replace(/[^0-9]/g, "");
+          var nisnVal = digitsOnly;
+          if (digitsOnly.length > 0 && digitsOnly.length < 10) {
+            while (nisnVal.length < 10) {
+              nisnVal = "0" + nisnVal;
+            }
+          }
+
+          if (nisnVal || namaVal || nipdVal) {
             list.push({
               timestamp: r[0],
               submissionId: r[1],
-              nama: String(r[2] || ""),
+              nama: namaVal,
               rombel: String(r[3] || ""),
-              nipd: String(r[4] || ""),
-              nisn: String(r[5] || "").trim(),
+              nipd: nipdVal,
+              nisn: nisnVal || rawNisn,
               score: (r[6] !== "" && r[6] !== null && !isNaN(r[6])) ? Number(r[6]) : null,
               status: String(r[7] || "Selesai"),
               violations: Number(r[8] || 0),
@@ -549,22 +600,31 @@ export async function syncSubmissionsFromGoogleSheets(
 
   // Jika data berhasil diunduh
   if (rawSubmissions !== null) {
-    // Penggabungan O(1) dengan HashMap cepat (tidak ada lag berulang)
     const localSubs: any[] = JSON.parse(localStorage.getItem('cbt_hasil') || '[]');
     const subMap = new Map<string, any>();
 
+    // Masukkan data lokal terlebih dahulu
     for (const item of localSubs) {
-      if (item && item.nisn) {
-        subMap.set(String(item.nisn).trim(), item);
-      }
+      if (!item) continue;
+      const key = normalizeNisn(item.nisn) || normalizeNipd(item.nipd) || normalizeName(item.nama);
+      if (key) subMap.set(key, item);
     }
 
+    // Masukkan dan timpa dengan data terbaru dari spreadsheet
     for (const sub of rawSubmissions) {
-      if (!sub.nisn) continue;
-      const nisnKey = String(sub.nisn).trim();
+      if (!sub) continue;
+      const normNisn = normalizeNisn(sub.nisn);
+      const rawNisn = String(sub.nisn || '').trim();
+      const normNipd = normalizeNipd(sub.nipd);
+      const normName = normalizeName(sub.nama);
+
+      // Gunakan kunci unik terbaik
+      const primaryKey = normNisn || (normNipd && normNipd !== '-' ? normNipd : '') || normName;
+      if (!primaryKey) continue;
+
       const item = {
         submissionId: sub.submissionId || `SUB-${Date.now()}`,
-        nisn: nisnKey,
+        nisn: normNisn || rawNisn,
         nipd: sub.nipd || '-',
         nama: sub.nama || 'Siswa',
         rombel: sub.rombel || '-',
@@ -577,11 +637,16 @@ export async function syncSubmissionsFromGoogleSheets(
         deviceInfo: sub.deviceInfo || { platform: '-' },
         violationLog: sub.violationDetails ? [{ type: sub.violationDetails, time: '-' }] : [],
       };
-      subMap.set(nisnKey, item);
+
+      subMap.set(primaryKey, item);
+      if (normNisn) subMap.set(normNisn, item);
+      if (rawNisn) subMap.set(rawNisn, item);
+      if (normNipd && normNipd !== '-') subMap.set(normNipd, item);
+      if (normName) subMap.set(normName, item);
     }
 
-    const merged = Array.from(subMap.values());
-    localStorage.setItem('cbt_hasil', JSON.stringify(merged));
+    const uniqueMerged = Array.from(new Set(subMap.values()));
+    localStorage.setItem('cbt_hasil', JSON.stringify(uniqueMerged));
 
     const durationMs = Math.round(performance.now() - startTime);
     return {
@@ -589,7 +654,7 @@ export async function syncSubmissionsFromGoogleSheets(
       count: rawSubmissions.length,
       durationMs,
       message: `${rawSubmissions.length} data ujian berhasil diunduh dari Google Spreadsheet.`,
-      submissions: merged,
+      submissions: uniqueMerged,
     };
   }
 

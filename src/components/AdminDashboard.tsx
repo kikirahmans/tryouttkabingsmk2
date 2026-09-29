@@ -27,6 +27,9 @@ import { EXAM_CONFIG } from '../data/cbtQuestions';
 import {
   syncSubmissionsFromGoogleSheets,
   deleteSubmissionFromGoogleSheets,
+  normalizeNisn,
+  normalizeName,
+  normalizeNipd,
 } from '../services/googleSheetsService';
 
 interface AdminDashboardProps {
@@ -156,24 +159,49 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return { primary: '-' };
   };
 
-  // Terapkan data pengerjaan ke state antarmuka secara instan (0 milidetik dengan O(1) HashMap)
+  // Terapkan data pengerjaan ke state antarmuka secara instan & akurat 100%
   const applySubmissionsToState = (subsList: any[]) => {
-    const subMap = new Map<string, any>();
+    // 1. Bangun peta indeks multi-kunci (NISN normalized, raw NISN, NIPD, dan Nama)
+    const subMapByNisn = new Map<string, any>();
+    const subMapByNipd = new Map<string, any>();
+    const subMapByName = new Map<string, any>();
+    const matchedSubs = new Set<any>();
+
     for (const s of subsList) {
-      if (s && s.nisn) {
-        subMap.set(String(s.nisn).trim(), s);
-      }
+      if (!s) continue;
+      const normN = normalizeNisn(s.nisn);
+      const rawN = String(s.nisn || '').trim();
+      const normP = normalizeNipd(s.nipd);
+      const normNm = normalizeName(s.nama);
+
+      if (normN) subMapByNisn.set(normN, s);
+      if (rawN) subMapByNisn.set(rawN, s);
+      if (normP && normP !== '-') subMapByNipd.set(normP, s);
+      if (normNm) subMapByName.set(normNm, s);
     }
 
+    // 2. Petakan ke 294 siswa resmi dengan multi-layer fallback
     const merged = STUDENTS_DATA.map((student) => {
-      const sub = subMap.get(student.nisn);
+      const stdNormN = normalizeNisn(student.nisn);
+      const stdRawN = student.nisn.trim();
+      const stdNormP = normalizeNipd(student.nipd);
+      const stdNormNm = normalizeName(student.nama);
+
+      // Cocokkan secara berurutan: NISN 10-digit pad -> Raw NISN -> NIPD -> Nama Lengkap
+      const sub =
+        (stdNormN ? subMapByNisn.get(stdNormN) : null) ||
+        (stdRawN ? subMapByNisn.get(stdRawN) : null) ||
+        (stdNormP ? subMapByNipd.get(stdNormP) : null) ||
+        (stdNormNm ? subMapByName.get(stdNormNm) : null);
+
       if (sub) {
+        matchedSubs.add(sub);
         return {
           ...student,
           status: sub.status || 'Selesai',
-          score: sub.score,
+          score: sub.score !== null && sub.score !== undefined ? Number(sub.score) : null,
           answeredCount: 30,
-          violations: sub.violations || 0,
+          violations: Number(sub.violations || 0),
           violationDetails: sub.violationLog || [],
           deviceInfo: sub.deviceInfo || { userAgent: '-', platform: '-' },
           isOnline: false,
@@ -196,6 +224,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         endTime: null,
       };
     });
+
+    // 3. JAMINAN 100%: Jika ada baris di Spreadsheet yang tidak cocok dengan daftar 294,
+    // tetap tampilkan di tabel agar tidak ada satupun nilai siswa yang hilang!
+    let extraIndex = STUDENTS_DATA.length + 1;
+    for (const s of subsList) {
+      if (s && !matchedSubs.has(s)) {
+        merged.push({
+          no: extraIndex++,
+          nama: s.nama || 'Peserta Spreadsheet',
+          rombel: s.rombel || 'Lainnya',
+          nipd: s.nipd || '-',
+          jk: 'L' as const,
+          nisn: normalizeNisn(s.nisn) || s.nisn || `EXT-${Date.now()}`,
+          status: s.status || 'Selesai',
+          score: s.score !== null && s.score !== undefined ? Number(s.score) : null,
+          answeredCount: 30,
+          violations: Number(s.violations || 0),
+          violationDetails: s.violationLog || [],
+          deviceInfo: s.deviceInfo || { userAgent: '-', platform: '-' },
+          isOnline: false,
+          durationSeconds: s.durationSeconds || 0,
+          startTime: s.startTime || '',
+          endTime: s.endTime || '',
+        });
+      }
+    }
 
     const total = merged.length;
     const completed = merged.filter((d) => d.status === 'Selesai').length;
